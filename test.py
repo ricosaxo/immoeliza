@@ -1,17 +1,15 @@
-import time
 from curl_cffi import requests as cureq
 import requests
 from bs4 import BeautifulSoup
 import json
 import pandas as pd
 import re
+import time
 
 headers = {"User-Agent" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"}
+  
 
-
-
-
-#getting the number of online listings and pages
+#getting the number of pages
 
 url = f"https://www.immoweb.be/nl/search-results/huis/te-koop?countries=BE&page=1&orderBy=relevance"
 
@@ -21,129 +19,79 @@ print(resp.status_code)
 
 data = resp.json()
 
+print(data.keys())
+
 total_houses_1_page = int(data['range'].split('-')[1])
 
 total_number_of_houses= data['totalItems']
 
 number_of_pages = total_number_of_houses//total_houses_1_page
 
-print(f'Immoweb contains {total_number_of_houses} listings on {number_of_pages} pages')
+print(number_of_pages)
+
+#looping through the pages and start collecting the data
+
+data_collection = []
+
+start_time = time.perf_counter()
+
+for page in range(1, 3):
+  url = f"https://www.immoweb.be/nl/search-results/huis/te-koop?countries=BE&page={page}&orderBy=relevance"
+  
+  resp = cureq.get(url, headers=headers, impersonate="chrome")
+
+  data_collection.append(resp.json())
+
+end_time = time.perf_counter()
+
+elapsed_time = end_time - start_time
+
+print(f"Data loaded in data.json, in {elapsed_time} seconds.")
+
+#Start to parse the data_collection
+all_properties = []
+for i in range(len(data_collection)):
+  
+  results_list = data_collection[i].get('results', [])
+
+  for i, property in enumerate(results_list):
+    property = {}
+    property['id'] = results_list[i].get('id')
+    property['type'] = results_list[i].get('property', {}).get('type')
+    property['subtype'] = results_list[i].get('property', {}).get('subtype')
+    property['country'] = results_list[i].get('property', {}).get('location', {}).get('country')
+    property['region'] = results_list[i].get('property', {}).get('location', {}).get('region')
+    property['locality_name'] = results_list[i].get('property', {}).get('location', {}).get('locality')
+    property['locality_code'] = results_list[i].get('property', {}).get('location', {}).get('postalCode')
+
+    property['bedroomcount'] = results_list[i].get('property', {}).get('bedroomCount', "None")
+
+    property['netHabitableSurface'] = results_list[i].get('property', {}).get('netHabitableSurface')
+    property['land_surface'] = results_list[i].get('property', {}).get('landSurface')
+    property['roomcount'] = results_list[i].get('property', {}).get('roomCount', "None")
+
+    property['transactionType'] = results_list[i].get('transaction', {}).get('type')
+    property['sale_annuity'] = results_list[i].get('transaction', {}).get('sale', {}).get('lifeAnnuity')
+    property['price'] = results_list[i].get('transaction', {}).get('sale', {}).get('price')
+    property['oldPrice'] = results_list[i].get('transaction', {}).get('sale', {}).get('oldPrice')
+
+    all_properties.append(property)
+    
+    
+print("All proporties extracted from data_collection:", len(all_properties), type(all_properties))
 
 
+#
+print(type(all_properties))  
+print(type(all_properties[0]))
 
-
-#FIRST SCRAPE
-
-def collect_data(pages: int, headers: dict):
-    """
-    This function collects data from the specified number of pages and returns a list.
-
-    Args:
-    pages (int): Number of pages to collect data from.
-    headers (dict): HTTP headers to include in the requests.
-    """
-    if not headers:
-        raise ValueError("Headers are required to make the request.")
-
-    data_collection = []
-
-    # Start the timer
-    start_time = time.perf_counter()
-    print(f"Start scraping {pages} pages...")
-
-    # Loop through the pages and collect data
-    for page in range(1, pages + 1):
-        url = f"https://www.immoweb.be/nl/search-results/huis/te-koop?countries=BE&page={page}&orderBy=relevance"
-        
-        try:
-            # Send the request
-            print(f"Scraping page {page}...")
-            resp = cureq.get(url, headers=headers, impersonate="chrome")
-            resp.raise_for_status()  # Raise an error for bad responses (4xx or 5xx)
-
-            # Try to parse the JSON response
-            data = resp.json()
-            data_collection.append(data)
-            print(f"Page {page} scraped successfully.")
-        
-        except requests.exceptions.RequestException as req_err:
-            # Handle network-related errors
-            print(f"Network error on page {page}: {req_err}")
-        except ValueError:
-            # Handle JSON decoding errors
-            print(f"Error decoding JSON on page {page}.")
-        except Exception as e:
-            # Catch any other exceptions
-            print(f"An error occurred on page {page}: {e}")
-
-    # Stop the timer and print the elapsed time
-    end_time = time.perf_counter()
-    elapsed_time = end_time - start_time
-    print(f"Data scraping completed in {elapsed_time:.2f} seconds.")
-
-    return data_collection
-
-
-
-def parse_data(listings: list):
-    """
-    Parses the listings data to extract relevant property details.
-
-    Args:
-    listings (list): List of raw listings data.
-
-    Returns:
-    all_properties (list): List of dictionaries with parsed property data.
-    """
-    all_properties = []
-
-    for listing in listings:
-        # Get the results list (default to an empty list if not found)
-        results_list = listing.get('results', [])
-
-        for result in results_list:
-            # Extract property details using nested get() for safety
-            property_details = result.get('property', {})
-            location = property_details.get('location', {})
-            transaction = result.get('transaction', {}).get('sale', {})
-
-            property_data = {
-                'id': result.get('id'),
-                'type': property_details.get('type'),
-                'subtype': property_details.get('subtype'),
-                'country': location.get('country'),
-                'region': location.get('region'),
-                'locality_name': location.get('locality'),
-                'locality_code': location.get('postalCode'),
-                'bedroom_count': property_details.get('bedroomCount', "None"),
-                'net_habitable_surface': property_details.get('netHabitableSurface'),
-                'land_surface': property_details.get('landSurface'),
-                'room_count': property_details.get('roomCount', "None"),
-                'transaction_type': result.get('transaction', {}).get('type'),
-                'sale_annuity': transaction.get('lifeAnnuity'),
-                'price': transaction.get('price'),
-                'old_price': transaction.get('oldPrice')
-            }
-
-            all_properties.append(property_data)
-
-    print(f"Extracted {len(all_properties)} properties from data.")
-    return all_properties
-
-
-
-
-#Testing the first scrape
-
-listings = collect_data(2, headers)
-all_properties = parse_data(listings)
-
-# Convert to DataFrame and export to CSV
 dataframe_first_scrape = pd.DataFrame.from_records(all_properties)
-csv_path = r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_1.csv"
-dataframe_first_scrape.to_csv(csv_path, index=False)
 
-print(f"Data saved to {csv_path}")
+dataframe_first_scrape.to_csv(r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_1.csv", index=False)
+
+
+
+
 
 
 
@@ -240,6 +188,8 @@ for property in all_properties:
 
 dataframe_second_scrape = pd.DataFrame.from_records(all_properties)
 
+print(dataframe_second_scrape)
+
 dataframe_first_scrape.to_csv(r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_1.csv", index=False)
 
 end_time = time.perf_counter()
@@ -250,10 +200,7 @@ print(f'The second scrape took {elapsed_time} seconds')
 
 #Concatenate the dataframes
 df_concat = pd.concat([dataframe_first_scrape, dataframe_second_scrape], axis=1)
+print(df_concat)
 
 df_concat.to_csv(r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_all.csv", index=False)
-
-
-
-
 
