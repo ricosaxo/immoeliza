@@ -4,14 +4,11 @@ import requests
 from bs4 import BeautifulSoup
 import json
 import pandas as pd
-import re
 
 headers = {"User-Agent" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"}
 
 
-
-
-#getting the number of online listings and pages
+#Getting the number of listings and the number of pages
 
 url = f"https://www.immoweb.be/nl/search-results/huis/te-koop?countries=BE&page=1&orderBy=relevance"
 
@@ -25,12 +22,9 @@ total_houses_1_page = int(data['range'].split('-')[1])
 
 total_number_of_houses= data['totalItems']
 
-number_of_pages = total_number_of_houses//total_houses_1_page
+number_of_pages = total_number_of_houses//(total_houses_1_page + 1)
 
 print(f'Immoweb contains {total_number_of_houses} listings on {number_of_pages} pages')
-
-
-
 
 #FIRST SCRAPE
 
@@ -84,6 +78,7 @@ def collect_data(pages: int, headers: dict):
     return data_collection
 
 
+# Parse the results of the first scraping
 
 def parse_data(listings: list):
     """
@@ -130,20 +125,31 @@ def parse_data(listings: list):
     print(f"Extracted {len(all_properties)} properties from data.")
     return all_properties
 
+#create a first listings list listings_1 
 
+listings_1 = []  
 
+for house in all_properties:
+    listing_1 = {}  
+    listing_1['id'] = house.get('id')
+    listing_1['locality_name'] = house.get('locality_name')
+    listing_1['Postal_code'] = house.get('locality_code')
+    listing_1['Price'] = house.get('price')
+    listing_1['Type_of_property'] = house.get('subtype')
+    listing_1['Number_of_rooms'] = house.get('room_count')
+    listing_1['Living_area'] = house.get('net_habitable_surface')
+    if house.get('sale_annuity') is None:
+        listing_1['Type_of_sale'] = house.get('transaction_type')
+    
+    listings_1.append(listing_1)  
 
-#Testing the first scrape
-
-listings = collect_data(2, headers)
-all_properties = parse_data(listings)
-
-# Convert to DataFrame and export to CSV
-dataframe_first_scrape = pd.DataFrame.from_records(all_properties)
+# Convert listings_1 to DataFrame and export to CSV
+dataframe_first_scrape = pd.DataFrame(listings_1)
 csv_path = r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_1.csv"
 dataframe_first_scrape.to_csv(csv_path, index=False)
 
-print(f"Data saved to {csv_path}")
+print(f"Data from first scrape saved to {csv_path}")
+
 
 
 
@@ -151,109 +157,119 @@ print(f"Data saved to {csv_path}")
 
 ## SECOND SCRAPE
 
-# Start the timer
-start_time = time.perf_counter()
 print("Start second scraping")
     
 data_collection_2 = []
 
-for property in all_properties:
-  
-    if 'type' in property and property['type'] == "HOUSE":
+for property in listings_1:
+    
+    base_url = "https://www.immoweb.be/nl/zoekertje/"
+    property_url = base_url + str(property['id'])
+    
+    try:
+        # Send request to property URL
+        r = requests.get(property_url, headers=headers)
+        r.raise_for_status()  
         
-        # Check if 'property_type2' exists and that the value is 'house'
-        base_url = "https://www.immoweb.be/nl/zoekertje/"
-        property_url = base_url + str(property['id'])
+        # Parse the page content
+        soup = BeautifulSoup(r.content, "html.parser")
+        print(f"Page {property_url} scraped successfully.")
         
-        try:
-            # Send request to property URL
-            r = requests.get(property_url, headers=headers)
-            r.raise_for_status()  
-            
-            # Parse the page content
-            soup = BeautifulSoup(r.content, "html.parser")
-            print(f"Page {property_url} scraped successfully.")
-            
-            # Try to extract the specific script tag
-            script_tag = soup.select_one('div.classified script[type="text/javascript"]')
-            
-            if script_tag:
-                # Process the script_tag here
-                print("Script tag found and processed.")
-            else:
-                print(f"No script tag found on {property_url}")
+        # Try to extract the specific script tag
+        script_tag = soup.select_one('div.classified script[type="text/javascript"]')
         
-        except Exception as e:
-            # Print the error message and continue to the next property
-            print(f"Error on page {property_url}: {e}")
-            continue
-        
-        js_content = script_tag.string
-        
-        # Find the start and end of the JSON object
-        start = js_content.find('{')
-        end = js_content.rfind('}') + 1
-        
-        # Extract and parse the JSON data
-        json_data = json.loads(js_content[start:end])
-        
-        property_data = json_data.get('property', {})
-        building_data = property_data.get('building')
-        kitchen_data = property_data.get('kitchen')
-        living_room_data = property_data.get('livingRoom')
-
-        property['furnished'] = json_data.get('transaction', {}).get('sale', {}).get('isFurnished', "None")
-
-        if isinstance(building_data, dict):
-            property['building'] = building_data
-            property['building_condition'] = building_data.get('condition', "None")
-            property['facade_count'] = building_data.get('facadeCount', "None")
+        if script_tag:
+            # Process the script_tag here
+            print("Script tag found and processed.")
         else:
-            property['building'] = "None"
-
-        property['pool'] = property_data.get('hasSwimmingPool', "None")
-
-        if isinstance(kitchen_data, dict):
-            property['kitchen'] = kitchen_data
-            property['kitchen_area'] = kitchen_data.get('surface', "None")
-            property['kitchen_type'] = kitchen_data.get('type', "None")
-        else:
-            property['kitchen'] = "None"
-
-        if isinstance(living_room_data, dict):
-            property['living_room'] = living_room_data
-            property['living_room_area'] = living_room_data.get('surface', "None")
-        else:
-            property['living_room'] = "None"
-
-        property['hasLivingRoom'] = property_data.get('hasLivingRoom', "None")
-
-        property['garden'] = property_data.get('hasGarden', "None")
-        property['garden_area'] = property_data.get('gardenSurface', "None")
-
-        property['terrace'] = property_data.get('hasTerrace', "None")
-        property['terrace_area'] = property_data.get('terraceSurface', "None")
-
-        property['fireplace'] = property_data.get('fireplaceExists', "None")
-
-# load the data_collection in a file
-
-dataframe_second_scrape = pd.DataFrame.from_records(all_properties)
-
-dataframe_first_scrape.to_csv(r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_1.csv", index=False)
-
-end_time = time.perf_counter()
-
-elapsed_time = end_time - start_time
-
-print(f'The second scrape took {elapsed_time} seconds')
-
-#Concatenate the dataframes
-df_concat = pd.concat([dataframe_first_scrape, dataframe_second_scrape], axis=1)
-
-df_concat.to_csv(r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_all.csv", index=False)
+            print(f"No script tag found on {property_url}")
+    
+    except Exception as e:
+        # Print the error message and continue to the next property
+        print(f"Error on page {property_url}: {e}")
+        continue
+    
+    # Extract the JavaScript object
+    js_content = script_tag.string
+    
+    # Find the start and end of the JSON object
+    start = js_content.find('{')
+    end = js_content.rfind('}') + 1
+    
+    # Extract and parse the JSON data
+    json_data = json.loads(js_content[start:end])
+    
+    #append json_data to the list data_collection2
+    data_collection_2.append(json_data)
 
 
+#parse en merge the data from data_collection_2 in listings_2
 
+listings_2 = []
 
+for house in data_collection_2:
+    listing_2 = {}
+    
+    
+    listing_2['id'] = house.get('id', None)
+    
+    
+    property_details = house.get('property', {})
+    
+    kitchen_details = property_details.get('kitchen')
+    if isinstance(kitchen_details, dict) and kitchen_details.get('type') == "INSTALLED":
+        listing_2['Equipped_kitchen'] = True
+    else:
+        listing_2['Equipped_kitchen'] = False
+    
+    is_furnished = property_details.get('transaction', {}).get('sale', {}).get('isFurnished')
+    listing_2['Furnished'] = False if is_furnished is None else True
+    
+    fireplace_exists = property_details.get('fireplaceExists')
+    listing_2['Open_fire'] = False if fireplace_exists is False else True
+    
+    has_terrace = property_details.get('hasTerrace')
+    if has_terrace is False:
+        listing_2['Terrace'] is None
+    else:
+        listing_2['Terrace'] = property_details.get('terraceSurface')
+    
+    has_garden = property_details.get('hasGarden')
+    if has_garden is False:
+        listing_2['Garden'] is None
+    else:
+        listing_2['Garden'] = property_details.get('gardenSurface')
+    
+    building_details = property_details.get('building')
+    if isinstance(building_details, dict):
+        listing_2['Number_of_facades'] = building_details.get('facadeCount', None)
+    else:
+        listing_2['Number_of_facades'] = None
+    
+    has_swimming_pool = property_details.get('hasSwimmingPool')
+    listing_2['Swimming_Pool'] = False if has_swimming_pool is False else True
+    
+    if isinstance(building_details, dict):
+        listing_2['State_of_building'] = building_details.get('condition', None)
+    else:
+        listing_2['State_of_building'] = None
+    
+    listings_2.append(listing_2)
 
+# Convert listings_2 to DataFrame and export to CSV
+
+dataframe_second_scrape = pd.DataFrame(listings_2)
+csv_path = r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_2.csv"
+dataframe_second_scrape.to_csv(csv_path, index=False)
+
+print(f"Data from second scrape saved to {csv_path}")
+
+# Merge all the data to Dataframe
+
+merged_df = pd.merge(dataframe_first_scrape, dataframe_second_scrape, on='id', how='inner')
+
+print(merged_df)
+csv_path = r"C:\Users\Rik\Desktop\immoeliza\scraper\immo_scraper_merged.csv"
+merged_df.to_csv(csv_path, index=False)
+
+print(f"Merged data saved to {csv_path}")
